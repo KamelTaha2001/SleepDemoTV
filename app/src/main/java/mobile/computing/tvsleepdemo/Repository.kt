@@ -1,9 +1,18 @@
 package mobile.computing.tvsleepdemo
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import android.widget.ImageView
+import android.widget.VideoView
 import com.bumptech.glide.Glide
+import com.google.android.exoplayer2.DefaultLoadControl
+import com.google.android.exoplayer2.DefaultRenderersFactory
+import com.google.android.exoplayer2.SimpleExoPlayer
+import com.google.android.exoplayer2.source.MediaSource
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
+import com.google.android.exoplayer2.ui.PlayerView
+import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -22,7 +31,7 @@ import kotlinx.coroutines.withContext
 
 class Repository(val context: Context) {
 
-    fun handleEverythingTemporarily(iv: ImageView) {
+    fun handleEverythingTemporarily(iv: ImageView, vv: VideoView) {
         GoogleSignIn.getLastSignedInAccount(context)
             ?.let { googleAccount ->
 
@@ -43,11 +52,19 @@ class Repository(val context: Context) {
                     val folderSearchResult: FileList? = getAllFoldersWithName(folderName, drive)
                     val folders: List<File>? = folderSearchResult?.files
 
-                    val imagesUrls: MutableList<String?> = mutableListOf()
+                    /*val imagesUrls: MutableList<String?> = mutableListOf()
                     populateImageUrlsList(folders, drive, imagesUrls)
                     if (imagesUrls.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
                             getAndDisplayImageUsingGlide(imagesUrls[0], iv)
+                        }
+                    }*/
+
+                    val videosUrls: MutableList<String?> = mutableListOf()
+                    populateVideoUrlsList(folders, drive, videosUrls)
+                    if (videosUrls.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            getAndDisplayVideo(videosUrls[0], vv, iv)
                         }
                     }
                 }
@@ -103,6 +120,36 @@ class Repository(val context: Context) {
         }
     }
 
+    private fun populateVideoUrlsList(
+        folders: List<File>?,
+        drive: Drive?,
+        videoUrls: MutableList<String?>
+    ) {
+        folders?.let {
+            if (folders.isNotEmpty()) {
+                val filesQuery =
+                    "'${folders[0].id}' in parents and mimeType contains 'video/'"
+                val filesSearchResult: FileList? = drive?.files()?.list()
+                    ?.setQ(filesQuery)
+                    ?.setFields("files(id, name, webContentLink)")
+                    ?.execute()
+                val videos: List<File>? = filesSearchResult?.files
+                videos?.let {
+                    for (video in videos) {
+                        val videoId: String = video.id
+                        val videoName: String = video.name
+                        val videoLink: String? = video.webContentLink
+                        Log.d(
+                            "MYTAG",
+                            "Video ID: $videoId, Video  Name: $videoName, Video Link: $videoLink"
+                        )
+                        videoUrls.add(videoLink)
+                    }
+                }
+            }
+        }
+    }
+
     private fun getAllFoldersWithName(folderName: String, drive: Drive?): FileList? {
         val folderQuery =
             "mimeType='application/vnd.google-apps.folder' and name='$folderName'"
@@ -118,4 +165,12 @@ class Repository(val context: Context) {
         .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
         .error(R.drawable.leadingpoint) // Error image if the load fails
         .into(iv)
+
+    private fun getAndDisplayVideo(videoUrl: String?, vv: VideoView, imageToHide: ImageView) {
+        vv.setVideoURI(Uri.parse(videoUrl))
+        vv.setOnPreparedListener {
+            imageToHide.setImageDrawable(null)
+            vv.start()
+        }
+    }
 }

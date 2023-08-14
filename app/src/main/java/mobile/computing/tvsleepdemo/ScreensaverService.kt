@@ -45,7 +45,7 @@ class ScreensaverService : DreamService() {
                 initializeUI()
             }
             val repository = Repository(this@ScreensaverService)
-            repository.handleEverythingTemporarily(ivLeadingLogo)
+            repository.handleEverythingTemporarily(ivLeadingLogo, videoView)
         }
     }
 
