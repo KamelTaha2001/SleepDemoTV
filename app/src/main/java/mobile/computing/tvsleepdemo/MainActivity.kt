@@ -31,7 +31,6 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
 
-    private lateinit var viewModelTv: ViewModelTV
     private lateinit var repository: Repository
     private lateinit var ivLeadingLogo: ImageView
     private lateinit var videoView: VideoView
@@ -87,12 +86,9 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         initializeUI()
-//
-        repository = Repository(this)
-        viewModelTv =
-            ViewModelProvider(this, ViewModelTvFactory(repository))[ViewModelTV::class.java]
 
-//        startForResult.launch(getGoogleSignInClient(this).signInIntent)
+/*        repository = Repository(this)
+        startForResult.launch(getGoogleSignInClient(this).signInIntent)*/
 
 
     }
