@@ -1,19 +1,15 @@
 package mobile.computing.tvsleepdemo
 
+import FileManager
+import GoogleDriveDownloader
 import android.content.Context
 import android.net.Uri
 import android.util.Log
 import android.widget.ImageView
 import android.widget.VideoView
 import com.bumptech.glide.Glide
-import com.google.android.exoplayer2.DefaultLoadControl
-import com.google.android.exoplayer2.DefaultRenderersFactory
-import com.google.android.exoplayer2.SimpleExoPlayer
-import com.google.android.exoplayer2.source.MediaSource
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
-import com.google.android.exoplayer2.ui.PlayerView
-import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
@@ -26,47 +22,36 @@ import com.google.api.services.drive.model.File
 import com.google.api.services.drive.model.FileList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-class Repository(val context: Context) {
+class Repository(private val context: Context) {
+    var googleAccount: GoogleSignInAccount? = null
+    var drive: Drive? = null
+    val videosOnDrive = MutableSharedFlow<List<File>>(0)
+    val imagesOnDrive = MutableSharedFlow<List<File>>(0)
+    var downloader: GoogleDriveDownloader? = null
 
-    fun handleEverythingTemporarily(iv: ImageView, vv: VideoView) {
+    fun setupDriveAndGetUrls(iv: ImageView, vv: VideoView) {
         GoogleSignIn.getLastSignedInAccount(context)
             ?.let { googleAccount ->
-
-                // get credentials
+                this.googleAccount = googleAccount
                 val credential = GoogleAccountCredential.usingOAuth2(
                     context,
                     listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE)
                 )
                 credential.selectedAccount = googleAccount.account!!
-
-                // get Drive Instance
-                val drive = getDrive(credential)
+                drive = getDrive(credential)
+                downloader = GoogleDriveDownloader(drive)
 
                 GlobalScope.launch(Dispatchers.IO) {
                     val folderName = "Leading Point"
                     // Query for the folder by its name
-
                     val folderSearchResult: FileList? = getAllFoldersWithName(folderName, drive)
                     val folders: List<File>? = folderSearchResult?.files
 
-                    /*val imagesUrls: MutableList<String?> = mutableListOf()
-                    populateImageUrlsList(folders, drive, imagesUrls)
-                    if (imagesUrls.isNotEmpty()) {
-                        withContext(Dispatchers.Main) {
-                            getAndDisplayImageUsingGlide(imagesUrls[0], iv)
-                        }
-                    }*/
-
-                    val videosUrls: MutableList<String?> = mutableListOf()
-                    populateVideoUrlsList(folders, drive, videosUrls)
-                    if (videosUrls.isNotEmpty()) {
-                        withContext(Dispatchers.Main) {
-                            getAndDisplayVideo(videosUrls[0], vv, iv)
-                        }
-                    }
+                    populateImagesList(folders, drive)
+                    populateVideosList(folders, drive)
                 }
             }
     }
@@ -90,10 +75,9 @@ class Repository(val context: Context) {
             .setApplicationName(context.getString(R.string.app_name))
             .build()
 
-    private fun populateImageUrlsList(
+    private suspend fun populateImagesList(
         folders: List<File>?,
-        drive: Drive?,
-        imagesUrls: MutableList<String?>
+        drive: Drive?
     ) {
         folders?.let {
             if (folders.isNotEmpty()) {
@@ -105,7 +89,7 @@ class Repository(val context: Context) {
                     ?.execute()
                 val images: List<File>? = filesSearchResult?.files
                 images?.let {
-                    for (image in images) {
+/*                    for (image in images) {
                         val imageId: String = image.id
                         val imageName: String = image.name
                         val thumbnailLink: String? = image.thumbnailLink
@@ -113,17 +97,16 @@ class Repository(val context: Context) {
                             "MYTAG",
                             "Image ID: $imageId, Image Name: $imageName, Thumbnail Link: $thumbnailLink"
                         )
-                        imagesUrls.add(thumbnailLink)
-                    }
+                    }*/
+                    imagesOnDrive.emit(images)
                 }
             }
         }
     }
 
-    private fun populateVideoUrlsList(
+    private suspend fun populateVideosList(
         folders: List<File>?,
         drive: Drive?,
-        videoUrls: MutableList<String?>
     ) {
         folders?.let {
             if (folders.isNotEmpty()) {
@@ -135,7 +118,7 @@ class Repository(val context: Context) {
                     ?.execute()
                 val videos: List<File>? = filesSearchResult?.files
                 videos?.let {
-                    for (video in videos) {
+                    /*for (video in videos) {
                         val videoId: String = video.id
                         val videoName: String = video.name
                         val videoLink: String? = video.webContentLink
@@ -143,8 +126,8 @@ class Repository(val context: Context) {
                             "MYTAG",
                             "Video ID: $videoId, Video  Name: $videoName, Video Link: $videoLink"
                         )
-                        videoUrls.add(videoLink)
-                    }
+                    }*/
+                    videosOnDrive.emit(videos)
                 }
             }
         }
@@ -159,18 +142,33 @@ class Repository(val context: Context) {
             ?.execute()
     }
 
-    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?, iv: ImageView) = Glide.with(context)
-        .load(thumbnailLink)
-        .fitCenter()
-        .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
-        .error(R.drawable.leadingpoint) // Error image if the load fails
-        .into(iv)
+    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?, iv: ImageView) =
+        Glide.with(context)
+            .load(thumbnailLink)
+            .fitCenter()
+            .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
+            .error(R.drawable.leadingpoint) // Error image if the load fails
+            .into(iv)
 
     private fun getAndDisplayVideo(videoUrl: String?, vv: VideoView, imageToHide: ImageView) {
         vv.setVideoURI(Uri.parse(videoUrl))
+        vv.setOnErrorListener { mp, what, extra ->
+            Log.d("MYTAG", "error")
+            true
+        }
+        Log.d("MYTAG", "URL Set")
         vv.setOnPreparedListener {
             imageToHide.setImageDrawable(null)
             vv.start()
+            Log.d("MYTAG", "Prepared")
         }
+    }
+
+    fun downloadFileFromDrive(file: File, fileType: FileType) {
+        val downloader = GoogleDriveDownloader(drive)
+        val output = downloader.downloadFile(file.id)
+        val saver = FileManager()
+        val success = saver.saveByteArrayToFile(output.toByteArray(), file.name, fileType)
+        Log.d("MYTAG", "Download: $success")
     }
 }

@@ -2,7 +2,9 @@ package mobile.computing.tvsleepdemo
 
 import android.app.Activity
 import android.content.Context
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.util.Log
 import android.widget.ImageView
 import android.widget.VideoView
@@ -35,7 +37,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var ivLeadingLogo: ImageView
     private lateinit var videoView: VideoView
 
-/*    private val startForResult =
+    private val startForResult =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result: ActivityResult ->
             if (result.resultCode == Activity.RESULT_OK) {
                 val intent = result.data
@@ -68,7 +70,7 @@ class MainActivity : FragmentActivity() {
                                     populateImageUrlsList(folders, drive, imagesUrls)
                                     if (imagesUrls.isNotEmpty()) {
                                         withContext(Dispatchers.Main) {
-                                            getAndDisplayImageUsingGlide(imagesUrls[0])
+                                            getAndDisplayImageUsingGlide(imagesUrls[0], ivLeadingLogo)
                                         }
                                     }
                                 }
@@ -78,7 +80,7 @@ class MainActivity : FragmentActivity() {
                     Log.d("MYTAG", "Null")
                 }
             }
-        }*/
+        }
 
 
 
@@ -87,9 +89,16 @@ class MainActivity : FragmentActivity() {
         setContentView(R.layout.activity_main)
         initializeUI()
 
-/*        repository = Repository(this)
-        startForResult.launch(getGoogleSignInClient(this).signInIntent)*/
-
+//        repository = Repository(this)
+//        startForResult.launch(getGoogleSignInClient(this).signInIntent)
+        ivLeadingLogo.setImageDrawable(null)
+        videoView.setVideoURI(Uri.parse("https://youtu.be/m8JkR6tI_q4"))
+        videoView.setOnPreparedListener {
+            videoView.start()
+        }
+        videoView.setOnCompletionListener {
+            videoView.start()
+        }
 
     }
 
@@ -98,7 +107,7 @@ class MainActivity : FragmentActivity() {
         videoView = findViewById(R.id.videoview)
     }
 
-/*    private fun getGoogleSignInClient(context: Context): GoogleSignInClient {
+    private fun getGoogleSignInClient(context: Context): GoogleSignInClient {
         val signInOptions = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE))
@@ -114,7 +123,7 @@ class MainActivity : FragmentActivity() {
                 JacksonFactory.getDefaultInstance(),
                 credential
             )
-            .setApplicationName(this@MainActivity.getString(R.string.app_name))
+            .setApplicationName(this.getString(R.string.app_name))
             .build()
 
     private fun populateImageUrlsList(
@@ -147,6 +156,36 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private fun populateVideoUrlsList(
+        folders: List<File>?,
+        drive: Drive?,
+        videoUrls: MutableList<String?>
+    ) {
+        folders?.let {
+            if (folders.isNotEmpty()) {
+                val filesQuery =
+                    "'${folders[0].id}' in parents and mimeType contains 'video/'"
+                val filesSearchResult: FileList? = drive?.files()?.list()
+                    ?.setQ(filesQuery)
+                    ?.setFields("files(id, name, webContentLink)")
+                    ?.execute()
+                val videos: List<File>? = filesSearchResult?.files
+                videos?.let {
+                    for (video in videos) {
+                        val videoId: String = video.id
+                        val videoName: String = video.name
+                        val videoLink: String? = video.webContentLink
+                        Log.d(
+                            "MYTAG",
+                            "Video ID: $videoId, Video  Name: $videoName, Video Link: $videoLink"
+                        )
+                        videoUrls.add(videoLink)
+                    }
+                }
+            }
+        }
+    }
+
     private fun getAllFoldersWithName(folderName: String, drive: Drive?): FileList? {
         val folderQuery =
             "mimeType='application/vnd.google-apps.folder' and name='$folderName'"
@@ -156,12 +195,20 @@ class MainActivity : FragmentActivity() {
             ?.execute()
     }
 
-    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?) = Glide.with(this)
+    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?, iv: ImageView) = Glide.with(this)
         .load(thumbnailLink)
         .fitCenter()
         .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
         .error(R.drawable.leadingpoint) // Error image if the load fails
-        .into(ivLeadingLogo)*/
+        .into(iv)
+
+    private fun getAndDisplayVideo(videoUrl: String?, vv: VideoView, imageToHide: ImageView) {
+        vv.setVideoURI(Uri.parse(videoUrl))
+        vv.setOnPreparedListener {
+            imageToHide.setImageDrawable(null)
+            vv.start()
+        }
+    }
 }
 
 

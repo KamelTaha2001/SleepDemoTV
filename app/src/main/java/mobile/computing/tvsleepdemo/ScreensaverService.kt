@@ -1,41 +1,28 @@
 package mobile.computing.tvsleepdemo
 
-import android.app.Activity
-import android.content.Context
-import android.net.Uri
+import FileManager
+import android.os.Environment
 import android.service.dreams.DreamService
 import android.util.Log
 import android.widget.ImageView
 import android.widget.VideoView
-import androidx.activity.result.ActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import com.bumptech.glide.Glide
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.Scope
-import com.google.android.gms.tasks.Task
-import com.google.api.client.extensions.android.http.AndroidHttp
-import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.json.jackson2.JacksonFactory
-import com.google.api.services.drive.Drive
-import com.google.api.services.drive.DriveScopes
-import com.google.api.services.drive.model.File
-import com.google.api.services.drive.model.FileList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class ScreensaverService : DreamService() {
-
-    private lateinit var ivLeadingLogo: ImageView
-    private lateinit var videoView: VideoView
+    private lateinit var ivImage: ImageView
+    private lateinit var vvVideo: VideoView
     private var globalScopeJob: Job? = null
+    private lateinit var alreadyDownloadedVideos: MutableList<String>
+    private lateinit var alreadyDownloadedImages: MutableList<String>
+    private lateinit var fileManager: FileManager
+    private lateinit var customSlideshow: CustomSlideshow
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -43,27 +30,74 @@ class ScreensaverService : DreamService() {
         globalScopeJob = GlobalScope.launch {
             withContext(Dispatchers.Main) {
                 initializeUI()
+                fileManager = FileManager()
+                customSlideshow = CustomSlideshow(ivImage, vvVideo, fileManager)
             }
             val repository = Repository(this@ScreensaverService)
-            repository.handleEverythingTemporarily(ivLeadingLogo, videoView)
+            repository.setupDriveAndGetUrls(ivImage, vvVideo)
+
+            alreadyDownloadedVideos = fileManager.getDownloadedFilesNames(FileType.VIDEO)
+            alreadyDownloadedImages = fileManager.getDownloadedFilesNames(FileType.IMAGE)
+
+            val imagesDownloadTask = async {
+                repository.imagesOnDrive.collect { images ->
+                    for (image in images) {
+                        if (!alreadyDownloadedImages.contains(image.name)) {
+                            repository.downloadFileFromDrive(image, FileType.IMAGE)
+                        }
+                    }
+                    val driveImagesNames: MutableList<String> = mutableListOf()
+                    images.forEach { file ->
+                        Log.d("MYTAG", file.name)
+                        driveImagesNames.add(file.name)
+                    }
+                    for (image in alreadyDownloadedImages) {
+                        if (!driveImagesNames.contains(image)) {
+                            val deleted = fileManager.deleteFile(FileType.IMAGE, image)
+                            Log.d("MYTAG", "$deleted")
+                        }
+                    }
+                }
+            }
+            val videosDownloadTask = async {
+                repository.videosOnDrive.collect { videos ->
+                    for (video in videos) {
+                        if (!alreadyDownloadedVideos.contains(video.name)) {
+                            repository.downloadFileFromDrive(video, FileType.VIDEO)
+                        }
+                    }
+                }
+            }
+
+            if (checkIfAnyFilesAvailableLocally()) {
+                customSlideshow.startSlideshow()
+            } else {
+                imagesDownloadTask.await()
+
+            }
         }
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         globalScopeJob?.cancel()
+        customSlideshow.stopSlideshow()
     }
 
     private fun initializeUI() {
         isInteractive = false
         setContentView(R.layout.activity_main)
-        ivLeadingLogo = findViewById(R.id.ivLeadingLogo)
-        ivLeadingLogo.setImageDrawable(
+        ivImage = findViewById(R.id.ivLeadingLogo)
+        ivImage.setImageDrawable(
             ContextCompat.getDrawable(
                 applicationContext,
                 R.drawable.leadingpoint
             )
         )
-        videoView = findViewById(R.id.videoview)
+        vvVideo = findViewById(R.id.videoview)
+    }
+
+    private fun checkIfAnyFilesAvailableLocally(): Boolean {
+        return alreadyDownloadedVideos.size > 0 || alreadyDownloadedImages.size > 0
     }
 }
