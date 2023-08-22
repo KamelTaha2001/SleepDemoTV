@@ -1,174 +1,190 @@
 package mobile.computing.tvsleepdemo
 
-import FileManager
-import GoogleDriveDownloader
+import GoogleDriveClient
 import android.content.Context
-import android.net.Uri
 import android.util.Log
-import android.widget.ImageView
-import android.widget.VideoView
-import com.bumptech.glide.Glide
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.Scope
-import com.google.api.client.extensions.android.http.AndroidHttp
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.json.jackson2.JacksonFactory
-import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
 import com.google.api.services.drive.model.FileList
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.FileNotFoundException
+import java.io.FileReader
 
-class Repository(private val context: Context) {
+/**
+ * @property googleAccount The Google account to sign in with.
+ * @property videosOnDriveFlow After retrieving all the videos from Google Drive, they are emitted to this flow. Collected at [ScreensaverService.decideDownloadOrDeleteFiles]
+ * @property imagesOnDriveFlow After retrieving all the images from Google Drive, they are emitted to this flow. Collected at [ScreensaverService.decideDownloadOrDeleteFiles]
+ * @property appSettingsFlow After retrieving the json settings file from Google Drive, it is emitted to this flow. Collected at [ScreensaverService.collectSettingsAndStartSlideshow]
+ * @property folderName The name of the folder on Google Drive where all the files are stored.
+ */
+class Repository(
+    private val context: Context,
+    private val fileManager: FileManager,
+) {
     var googleAccount: GoogleSignInAccount? = null
-    var drive: Drive? = null
-    val videosOnDrive = MutableSharedFlow<List<File>>(0)
-    val imagesOnDrive = MutableSharedFlow<List<File>>(0)
-    var downloader: GoogleDriveDownloader? = null
+    val videosOnDriveFlow = MutableSharedFlow<List<File>>(0)
+    val imagesOnDriveFlow = MutableSharedFlow<List<File>>(0)
+    val appSettingsFlow = MutableSharedFlow<AppSettings?>(0)
+    val folderName = "Leading Point"
+    var googleDriveClient: GoogleDriveClient? = null
+    val defaultAppSettings = AppSettings(true, true, 5000)
 
-    fun setupDriveAndGetUrls(iv: ImageView, vv: VideoView) {
-        GoogleSignIn.getLastSignedInAccount(context)
-            ?.let { googleAccount ->
-                this.googleAccount = googleAccount
-                val credential = GoogleAccountCredential.usingOAuth2(
-                    context,
-                    listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE)
-                )
-                credential.selectedAccount = googleAccount.account!!
-                drive = getDrive(credential)
-                downloader = GoogleDriveDownloader(drive)
-
-                GlobalScope.launch(Dispatchers.IO) {
-                    val folderName = "Leading Point"
-                    // Query for the folder by its name
-                    val folderSearchResult: FileList? = getAllFoldersWithName(folderName, drive)
-                    val folders: List<File>? = folderSearchResult?.files
-
-                    populateImagesList(folders, drive)
-                    populateVideosList(folders, drive)
-                }
-            }
-    }
-
-    private fun getGoogleSignInClient(context: Context): GoogleSignInClient {
-        val signInOptions = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE))
-            .build()
-
-        return GoogleSignIn.getClient(context, signInOptions)
-    }
-
-    private fun getDrive(credential: GoogleAccountCredential?): Drive? =
-        Drive
-            .Builder(
-                AndroidHttp.newCompatibleTransport(),
-                JacksonFactory.getDefaultInstance(),
-                credential
+    /**
+    - Signs in using the last signed in account.
+    - Initializes the [googleDriveClient] instance.
+    - populates [imagesOnDriveFlow] and [videosOnDriveFlow] and [appSettingsFlow].
+     * @return A boolean indicating whether the lastSignedInAccount process was successfull or not.
+     */
+    fun setupDrive(): Boolean {
+        val lastSignInResult = GoogleSignIn.getLastSignedInAccount(context)
+        return if (lastSignInResult == null) {
+            false
+        } else {
+            this.googleAccount = lastSignInResult
+            val credential = GoogleAccountCredential.usingOAuth2(
+                context,
+                listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE)
             )
-            .setApplicationName(context.getString(R.string.app_name))
-            .build()
-
-    private suspend fun populateImagesList(
-        folders: List<File>?,
-        drive: Drive?
-    ) {
-        folders?.let {
-            if (folders.isNotEmpty()) {
-                val filesQuery =
-                    "'${folders[0].id}' in parents and mimeType contains 'image/'"
-                val filesSearchResult: FileList? = drive?.files()?.list()
-                    ?.setQ(filesQuery)
-                    ?.setFields("files(id, name, thumbnailLink)")
-                    ?.execute()
-                val images: List<File>? = filesSearchResult?.files
-                images?.let {
-/*                    for (image in images) {
-                        val imageId: String = image.id
-                        val imageName: String = image.name
-                        val thumbnailLink: String? = image.thumbnailLink
-                        Log.d(
-                            "MYTAG",
-                            "Image ID: $imageId, Image Name: $imageName, Thumbnail Link: $thumbnailLink"
-                        )
-                    }*/
-                    imagesOnDrive.emit(images)
-                }
-            }
-        }
-    }
-
-    private suspend fun populateVideosList(
-        folders: List<File>?,
-        drive: Drive?,
-    ) {
-        folders?.let {
-            if (folders.isNotEmpty()) {
-                val filesQuery =
-                    "'${folders[0].id}' in parents and mimeType contains 'video/'"
-                val filesSearchResult: FileList? = drive?.files()?.list()
-                    ?.setQ(filesQuery)
-                    ?.setFields("files(id, name, webContentLink)")
-                    ?.execute()
-                val videos: List<File>? = filesSearchResult?.files
-                videos?.let {
-                    /*for (video in videos) {
-                        val videoId: String = video.id
-                        val videoName: String = video.name
-                        val videoLink: String? = video.webContentLink
-                        Log.d(
-                            "MYTAG",
-                            "Video ID: $videoId, Video  Name: $videoName, Video Link: $videoLink"
-                        )
-                    }*/
-                    videosOnDrive.emit(videos)
-                }
-            }
-        }
-    }
-
-    private fun getAllFoldersWithName(folderName: String, drive: Drive?): FileList? {
-        val folderQuery =
-            "mimeType='application/vnd.google-apps.folder' and name='$folderName'"
-        return drive?.files()?.list()
-            ?.setQ(folderQuery)
-            ?.setFields("files(id, name)")
-            ?.execute()
-    }
-
-    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?, iv: ImageView) =
-        Glide.with(context)
-            .load(thumbnailLink)
-            .fitCenter()
-            .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
-            .error(R.drawable.leadingpoint) // Error image if the load fails
-            .into(iv)
-
-    private fun getAndDisplayVideo(videoUrl: String?, vv: VideoView, imageToHide: ImageView) {
-        vv.setVideoURI(Uri.parse(videoUrl))
-        vv.setOnErrorListener { mp, what, extra ->
-            Log.d("MYTAG", "error")
+            credential.selectedAccount = lastSignInResult.account
+            googleDriveClient = GoogleDriveClient()
+            googleDriveClient?.retrieveDrive(credential, context.getString(R.string.app_name))
             true
         }
-        Log.d("MYTAG", "URL Set")
-        vv.setOnPreparedListener {
-            imageToHide.setImageDrawable(null)
-            vv.start()
-            Log.d("MYTAG", "Prepared")
+    }
+
+    fun retrieveAllData() {
+        // Query for the folder containing all the files by its name
+        val folderSearchResult: FileList? =
+            googleDriveClient?.getAllFoldersWithName(folderName)
+        val folders: List<File>? = folderSearchResult?.files
+
+        GlobalScope.launch {
+            getAndStoreAppSettingsFile(folders)
+        }
+        GlobalScope.launch {
+            populateFilesList(folders, FileType.IMAGE)
+        }
+        GlobalScope.launch {
+            populateFilesList(folders, FileType.VIDEO)
         }
     }
 
+    /**
+     * Retrieves all the images or videos from [folderName] on Google Drive and emits them to [imagesOnDriveFlow] or [videosOnDriveFlow].
+     * Does not retrieve the files in the trash.
+     * @param folders The list of folders with the name of [folderName] on Google Drive.
+     */
+    private suspend fun populateFilesList(
+        folders: List<File>?,
+        fileType: FileType
+    ) {
+        folders?.let {
+            if (folders.isNotEmpty()) {
+                val files: List<File>? =
+                    googleDriveClient?.getAllFilesInFolder(folders[0], fileType)
+                files?.let {
+                    when (fileType) {
+                        FileType.IMAGE -> imagesOnDriveFlow.emit(files)
+                        FileType.VIDEO -> videosOnDriveFlow.emit(files)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Retrieves the [appSettingsFlow] json file from Google Drive and stores it in [FileManager.downloadsFolder]/[FileManager.rootFolder].
+     * Suspends due to the call of [Repository.setAppSettings] which emits the newly retrieved app settings.
+     * @param folders The list of folders with the name of [folderName] on Google Drive.
+     */
+    private suspend fun getAndStoreAppSettingsFile(
+        folders: List<File>?,
+    ) {
+        folders?.let {
+            if (folders.isNotEmpty()) {
+                val files: List<File>? = googleDriveClient?.getAllFilesWithNameInFolder(
+                    folders[0].id,
+                    fileManager.settingsFileName
+                )?.files
+                files?.let {
+                    for (file in files) {
+                        try {
+                            val filePathWithName =
+                                "${fileManager.downloadsFolder}/${fileManager.rootFolder}/${fileManager.settingsFileName}" // The path where the file will be stored
+                            googleDriveClient?.downloadFile(file.id, filePathWithName)
+                            setAppSettings() // Emits the new value of app settings
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Reads the app settings json file from [FileManager.downloadsFolder]/[FileManager.rootFolder].
+     * Then emits the file. Collected in [ScreensaverService.collectSettingsAndStartSlideshow].
+     */
+    private suspend fun setAppSettings() {
+        withContext(Dispatchers.IO) {
+            val gson = Gson()
+            try {
+                val jsonReader = FileReader(
+                    java.io.File(
+                        fileManager.downloadsFolder,
+                        "${fileManager.rootFolder}/${fileManager.settingsFileName}"
+                    )
+                )
+                val settings: AppSettings =
+                    gson.fromJson(jsonReader, AppSettings::class.java)
+                jsonReader.close()
+                appSettingsFlow.emit(settings)
+            } catch (e: FileNotFoundException) {
+                appSettingsFlow.emit(defaultAppSettings)
+            }
+        }
+    }
+
+    /**
+     * Downloads a specific file from the Google Drive. Used when a file is found on Google Drive, but not in the external storage.
+     * A synchronized block is needed because the content of the slideshow must be updated immediately with the new content.
+     * Updating it without a synchronized block would lead to a race condition with [CustomSlideshow.resetIterator] or [CustomSlideshow.startSlideshow].
+     * @param file The file to be downloaded.
+     * @param fileType Enum that indicates whether the file to be downloaded is a video or an image.
+     * @return A boolean indicating whether the file is deleted successfully or not.
+     */
     fun downloadFileFromDrive(file: File, fileType: FileType) {
-        val downloader = GoogleDriveDownloader(drive)
-        val output = downloader.downloadFile(file.id)
-        val saver = FileManager()
-        val success = saver.saveByteArrayToFile(output.toByteArray(), file.name, fileType)
-        Log.d("MYTAG", "Download: $success")
+        when (fileType) {
+            FileType.IMAGE -> {
+                googleDriveClient?.downloadFile(
+                    file.id,
+                    "${fileManager.downloadsFolder}/${fileManager.rootFolder}/${fileManager.imagesFolder}/${file.name}"
+                )
+                synchronized(fileManager.alreadyDownloadedImages) {
+                    fileManager.alreadyDownloadedImages.add(file.name)
+                    fileManager.updateCustomSlideShow()
+                }
+            }
+
+            FileType.VIDEO -> {
+                googleDriveClient?.downloadFile(
+                    file.id,
+                    "${fileManager.downloadsFolder}/${fileManager.rootFolder}/${fileManager.videosFolder}/${file.name}"
+                )
+                synchronized(fileManager.alreadyDownloadedVideos) {
+                    fileManager.alreadyDownloadedVideos.add(file.name)
+                    fileManager.updateCustomSlideShow()
+                }
+            }
+        }
     }
 }

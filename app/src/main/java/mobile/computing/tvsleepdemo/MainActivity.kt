@@ -2,40 +2,37 @@ package mobile.computing.tvsleepdemo
 
 import android.app.Activity
 import android.content.Context
-import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.util.Log
-import android.widget.ImageView
-import android.widget.VideoView
+import android.widget.Button
+import android.widget.EditText
+import android.widget.Toast
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
-import com.bumptech.glide.Glide
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Task
-import com.google.api.client.extensions.android.http.AndroidHttp
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.json.jackson2.JacksonFactory
-import com.google.api.services.drive.Drive
+import com.google.api.client.http.ByteArrayContent
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
-import com.google.api.services.drive.model.FileList
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
 
     private lateinit var repository: Repository
-    private lateinit var ivLeadingLogo: ImageView
-    private lateinit var videoView: VideoView
+    private lateinit var fileManager: FileManager
+    private lateinit var etImageDuration: EditText
+    private lateinit var btnUpload: Button
 
     private val startForResult =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result: ActivityResult ->
@@ -48,63 +45,77 @@ class MainActivity : FragmentActivity() {
                     task.run {
                         GoogleSignIn.getLastSignedInAccount(this@MainActivity)
                             ?.let { googleAccount ->
-
                                 // get credentials
                                 val credential = GoogleAccountCredential.usingOAuth2(
                                     this@MainActivity,
                                     listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE)
                                 )
                                 credential.selectedAccount = googleAccount.account!!
-
-                                // get Drive Instance
-                                val drive = getDrive(credential)
-
-                                lifecycleScope.launch(Dispatchers.IO) {
-                                    val folderName = "Leading Point"
-                                    // Query for the folder by its name
-
-                                    val folderSearchResult: FileList? = getAllFoldersWithName(folderName, drive)
-                                    val folders: List<File>? = folderSearchResult?.files
-
-                                    val imagesUrls: MutableList<String?> = mutableListOf()
-                                    populateImageUrlsList(folders, drive, imagesUrls)
-                                    if (imagesUrls.isNotEmpty()) {
-                                        withContext(Dispatchers.Main) {
-                                            getAndDisplayImageUsingGlide(imagesUrls[0], ivLeadingLogo)
-                                        }
-                                    }
-                                }
                             }
                     }
-                } else {
-                    Log.d("MYTAG", "Null")
                 }
             }
         }
-
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         initializeUI()
-
-//        repository = Repository(this)
-//        startForResult.launch(getGoogleSignInClient(this).signInIntent)
-        ivLeadingLogo.setImageDrawable(null)
-        videoView.setVideoURI(Uri.parse("https://youtu.be/m8JkR6tI_q4"))
-        videoView.setOnPreparedListener {
-            videoView.start()
+        startForResult.launch(getGoogleSignInClient(this).signInIntent)
+        fileManager = FileManager(null)
+        repository = Repository(this, fileManager)
+        GlobalScope.launch {
+            repository.setupDrive()
+            withContext(Dispatchers.Main) {
+                initializeUploadButtonListener()
+            }
         }
-        videoView.setOnCompletionListener {
-            videoView.start()
-        }
-
     }
 
     private fun initializeUI() {
-        ivLeadingLogo = findViewById(R.id.ivLeadingLogo)
-        videoView = findViewById(R.id.videoview)
+        etImageDuration = findViewById(R.id.etImageDuration)
+        btnUpload = findViewById(R.id.btnUpload)
+    }
+
+    private fun initializeUploadButtonListener() {
+        btnUpload.setOnClickListener {
+            showToast("Uploading...", true)
+            lifecycleScope.launch {
+                val imageDuration = withContext(Dispatchers.Main) {
+                    if (etImageDuration.text.isNotEmpty())
+                     etImageDuration.text.toString().toInt() * 1000
+                    else
+                        repository.defaultAppSettings.imageDuration
+                }
+                withContext(Dispatchers.IO) {
+                    val appSettings = AppSettings(true, true, imageDuration)
+                    val gson = Gson()
+                    val json = gson.toJson(appSettings)
+                    val folders = repository.googleDriveClient?.getAllFoldersWithName(repository.folderName)        // May need an enhancement
+                    folders?.let {
+                        if (folders.files.isNotEmpty()) {
+                            val files = repository.googleDriveClient?.getAllFilesWithNameInFolder(folders.files[0].id, fileManager.settingsFileName)        // May need an enhancement
+                            files?.let {
+                                if (files.files.isNotEmpty()) {
+                                    val mediaContent = ByteArrayContent("application/json", json.toByteArray())
+                                    repository.googleDriveClient?.updateFile(files.files[0].id, mediaContent)
+                                } else {
+                                    val fileMetadata = File()
+                                    fileMetadata.name = fileManager.settingsFileName
+                                    fileMetadata.mimeType = "application/json"
+                                    fileMetadata.parents = listOf(folders.files[0].id)
+                                    val mediaContent = ByteArrayContent("application/json", json.toByteArray())
+                                    repository.googleDriveClient?.createFile("id", fileMetadata, mediaContent)
+                                }
+                                withContext(Dispatchers.Main) {
+                                    showToast("Settings Updated", false)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun getGoogleSignInClient(context: Context): GoogleSignInClient {
@@ -112,102 +123,14 @@ class MainActivity : FragmentActivity() {
             .requestEmail()
             .requestScopes(Scope(DriveScopes.DRIVE_FILE), Scope(DriveScopes.DRIVE))
             .build()
-
         return GoogleSignIn.getClient(context, signInOptions)
     }
 
-    private fun getDrive(credential: GoogleAccountCredential?): Drive? =
-        Drive
-            .Builder(
-                AndroidHttp.newCompatibleTransport(),
-                JacksonFactory.getDefaultInstance(),
-                credential
-            )
-            .setApplicationName(this.getString(R.string.app_name))
-            .build()
-
-    private fun populateImageUrlsList(
-        folders: List<File>?,
-        drive: Drive?,
-        imagesUrls: MutableList<String?>
-    ) {
-        folders?.let {
-            if (folders.isNotEmpty()) {
-                val filesQuery =
-                    "'${folders[0].id}' in parents and mimeType contains 'image/'"
-                val filesSearchResult: FileList? = drive?.files()?.list()
-                    ?.setQ(filesQuery)
-                    ?.setFields("files(id, name, thumbnailLink)")
-                    ?.execute()
-                val images: List<File>? = filesSearchResult?.files
-                images?.let {
-                    for (image in images) {
-                        val imageId: String = image.id
-                        val imageName: String = image.name
-                        val thumbnailLink: String? = image.thumbnailLink
-                        Log.d(
-                            "MYTAG",
-                            "Image ID: $imageId, Image Name: $imageName, Thumbnail Link: $thumbnailLink"
-                        )
-                        imagesUrls.add(thumbnailLink)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun populateVideoUrlsList(
-        folders: List<File>?,
-        drive: Drive?,
-        videoUrls: MutableList<String?>
-    ) {
-        folders?.let {
-            if (folders.isNotEmpty()) {
-                val filesQuery =
-                    "'${folders[0].id}' in parents and mimeType contains 'video/'"
-                val filesSearchResult: FileList? = drive?.files()?.list()
-                    ?.setQ(filesQuery)
-                    ?.setFields("files(id, name, webContentLink)")
-                    ?.execute()
-                val videos: List<File>? = filesSearchResult?.files
-                videos?.let {
-                    for (video in videos) {
-                        val videoId: String = video.id
-                        val videoName: String = video.name
-                        val videoLink: String? = video.webContentLink
-                        Log.d(
-                            "MYTAG",
-                            "Video ID: $videoId, Video  Name: $videoName, Video Link: $videoLink"
-                        )
-                        videoUrls.add(videoLink)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun getAllFoldersWithName(folderName: String, drive: Drive?): FileList? {
-        val folderQuery =
-            "mimeType='application/vnd.google-apps.folder' and name='$folderName'"
-        return drive?.files()?.list()
-            ?.setQ(folderQuery)
-            ?.setFields("files(id, name)")
-            ?.execute()
-    }
-
-    private fun getAndDisplayImageUsingGlide(thumbnailLink: String?, iv: ImageView) = Glide.with(this)
-        .load(thumbnailLink)
-        .fitCenter()
-        .placeholder(R.drawable.leadingpoint) // Placeholder image while loading
-        .error(R.drawable.leadingpoint) // Error image if the load fails
-        .into(iv)
-
-    private fun getAndDisplayVideo(videoUrl: String?, vv: VideoView, imageToHide: ImageView) {
-        vv.setVideoURI(Uri.parse(videoUrl))
-        vv.setOnPreparedListener {
-            imageToHide.setImageDrawable(null)
-            vv.start()
-        }
+    private fun showToast(message: String, isShort: Boolean) {
+        if (isShort)
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        else
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 }
 
